@@ -1,6 +1,0 @@
-#reference "shaders_slang/crt/crt-guest-advanced.slangp"
-CP = "5.000000"
-GAMMA_INPUT = "3.399999"
-interm = "5.000000"
-shadowMask = "11.000000"
-masksize = "2.000000"
