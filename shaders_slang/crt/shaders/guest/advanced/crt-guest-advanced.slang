@@ -27,7 +27,7 @@
 layout(push_constant) uniform Push
 {
 	float TATE, IOS, OS, BLOOM, brightboost, brightboost1, gsl, scanline1, scanline2, beam_min, beam_max, beam_size,
-	h_sharp, s_sharp, csize, bsize1, warpX, warpY, glow, vertmask, spike, ring;
+	h_sharp, s_sharp, csize, bsize1, warpX, warpY, glow, vertmask, spike, ring, no_scanlines;
 } params;
 
 layout(std140, set = 0, binding = 0) uniform UBO
@@ -93,7 +93,7 @@ layout(std140, set = 0, binding = 0) uniform UBO
 #pragma parameter scanline2 "          Scanline Beam Shape Edges" 8.0 0.0 70.0 1.0 
 #define scanline2    params.scanline2      // scanline param, vertical sharpness
 
-#pragma parameter beam_min "          Scanline Shape Dark Pixels" 1.30 0.25 5.0 0.05
+#pragma parameter beam_min "          Scanline Shape Dark Pixels" 1.30 0.25 10.0 0.05
 #define beam_min     params.beam_min     // dark area beam min - narrow
 
 #pragma parameter beam_max "          Scanline Shape Bright Pixels" 1.00 0.4 3.5 0.025
@@ -105,10 +105,10 @@ layout(std140, set = 0, binding = 0) uniform UBO
 #pragma parameter vertmask "          Scanline Color Deconvergence" 0.0 -1.0 1.0 0.1
 #define vertmask     params.vertmask     // Scanline deconvergence colors
 
-#pragma parameter scans "          Scanline Saturation / Mask Falloff" 0.4 0.0 3.5 0.05
+#pragma parameter scans "          Scanline Saturation / Mask Falloff" 0.5 -5.0 5.0 0.10
 #define scans        global.scans     // scanline saturation
 
-#pragma parameter scan_falloff "          Scanline Falloff" 1.0 0.25 2.0 0.05
+#pragma parameter scan_falloff "          Scanline Falloff" 1.0 0.20 2.0 0.05
 #define scan_falloff        global.scan_falloff     // scanline falloff
 
 #pragma parameter spike "          Scanline Spike Removal" 1.0 0.0 2.0 0.10
@@ -120,12 +120,15 @@ layout(std140, set = 0, binding = 0) uniform UBO
 #pragma parameter scangamma "          Scanline Gamma" 2.40 0.5 5.0 0.05
 #define scangamma global.scangamma
 
+#pragma parameter no_scanlines "          No-scanline mode" 0.0 0.0 1.0 1.0
+#define no_scanlines params.no_scanlines
+
 #pragma parameter bogus_filtering "[ FILTERING OPTIONS ]: " 0.0 0.0 1.0 1.0
 
 #pragma parameter h_sharp "          Horizontal sharpness" 5.20 0.20 15.0 0.10
 #define h_sharp      params.h_sharp     // pixel sharpness
 
-#pragma parameter s_sharp "          Substractive sharpness (1.0 recommended)" 0.50 0.0 1.5 0.10
+#pragma parameter s_sharp "          Substractive sharpness (1.0 recommended)" 0.50 0.0 2.0 0.10
 #define s_sharp      params.s_sharp     // substractive sharpness
 
 #pragma parameter ring "          Substractive sharpness Ringing" 0.0 0.0 3.0 0.05
@@ -142,7 +145,7 @@ layout(std140, set = 0, binding = 0) uniform UBO
 
 #pragma parameter bogus_screen "[ SCREEN OPTIONS ]: " 0.0 0.0 1.0 1.0
 
-#pragma parameter intres "          Internal Resolution Y: 224p/240p, 1.5...y-dowsample" 0.0 0.0 6.0 0.5 // Joint parameter with linearize pass, values must match
+#pragma parameter intres "          Internal Resolution Y: 0.5...y-dowsample" 0.0 0.0 6.0 0.5 // Joint parameter with linearize pass, values must match
 
 #pragma parameter TATE "          TATE Mode" 0.0 0.0 1.0 1.0
 #define TATE         params.TATE     // Screen orientation
@@ -170,9 +173,6 @@ layout(std140, set = 0, binding = 0) uniform UBO
 
 #pragma parameter overscanY "          Overscan Y original pixels" 0.0 -200.0 200.0 1.0
 #define overscanY        global.overscanY     // OverscanY pixels
-
-#pragma parameter prescalex "          Prescale-X Factor (for xBR...pre-shader)" 1.0 1.0 4.0 1.0
-#define prescalex        global.prescalex     // prescale-x factor
 
 
 #define COMPAT_TEXTURE(c,d) texture(c,d)
@@ -260,7 +260,9 @@ vec3 gc(vec3 c)
 
 void main()
 {
-	vec4 SourceSize = global.OriginalSize * mix( vec4(prescalex, 1.0, 1.0/prescalex, 1.0), vec4(1.0, prescalex, 1.0, 1.0/prescalex), TATE);
+	vec2 prescalex = vec2(vec2(textureSize(LinearizePass, 0))/global.OriginalSize.xy);
+	
+	vec4 SourceSize = global.OriginalSize * mix( vec4(prescalex.x, 1.0, 1.0/prescalex.x, 1.0), vec4(1.0, prescalex.y, 1.0, 1.0/prescalex.y), TATE);
 	
 	float lum = COMPAT_TEXTURE(AvgLumPass, vec2(0.5,0.5)).a;
 	
@@ -270,17 +272,17 @@ void main()
 	bool notate  = (TATE < 0.5);
 
 	float SourceY = mix(SourceSize.y, SourceSize.x, TATE);
+	
 	float sy = 1.0;
-	if (global.intres == 0.5) sy = SourceY/224.0; else
-	if (global.intres == 1.0) sy = SourceY/240.0; else
-	if (global.intres > 1.25) sy = global.intres;
+	if (global.intres == 1.0) sy = SourceY/224.0;
+	if (global.intres > 0.25 && global.intres != 1.0) sy = global.intres;
 	if (notate) SourceSize*=vec4(1.0, 1.0/sy, 1.0, sy); else SourceSize*=vec4(1.0/sy, 1.0, sy, 1.0);
 	
 	// Calculating texel coordinates
    
 	vec2 texcoord = TEX0.xy;
 	if (IOS > 0.0 && !interb){
-		vec2 ofactor = OutputSize.xy/SourceSize.xy;
+		vec2 ofactor = OutputSize.xy/global.OriginalSize.xy;
 		vec2 intfactor = (IOS < 2.5) ? floor(ofactor) : ceil(ofactor);
 		vec2 diff = ofactor/intfactor;
 		float scan = mix(diff.y, diff.x, TATE);
@@ -325,12 +327,15 @@ void main()
 	
 	vec2 pC4 = floor(OGL2Pos) * ps + 0.5*ps; 
 	
+	if (global.intres == 0.5 &&  notate && prescalex.y < 1.5) pC4.y = floor(pC4.y * global.OriginalSize.y)*global.OriginalSize.w + 0.5*global.OriginalSize.w;
+	if (global.intres == 0.5 && !notate && prescalex.x < 1.5) pC4.x = floor(pC4.x * global.OriginalSize.x)*global.OriginalSize.z + 0.5*global.OriginalSize.z;
+	
 	if (interb)  pC4.y = pos.y;
 	
 	float zero = exp2(-h_sharp);
 	float sharp1 = s_sharp * zero;
 	
-	float fdivider = min(prescalex, 2.0);
+	float fdivider = max(min(mix(prescalex.x, prescalex.y,TATE), 2.0), 1.5*float(interb));
 	
 	float wl3 = (2.0 + fpx)/fdivider;
 	float wl2 = (1.0 + fpx)/fdivider;
@@ -350,8 +355,8 @@ void main()
 
 	float twl3 = max(wl3 - sharp1, 0.0);
 	float twl2 = max(wl2 - sharp1, mix(-0.12, 0.0, 1.0-fp1*fp1));
-	float twl1 = max(wl1 - sharp1, 0.0);
-	float twr1 = max(wr1 - sharp1, 0.0);
+	float twl1 = max(wl1 - sharp1, -0.12);
+	float twr1 = max(wr1 - sharp1, -0.12);
 	float twr2 = max(wr2 - sharp1, mix(-0.12, 0.0, 1.0-fpx*fpx));
 	float twr3 = max(wr3 - sharp1, 0.0);
 	
@@ -401,8 +406,8 @@ void main()
 	float rm2 = max(max(r2.r,r2.g),r2.b);	
 	
 	float swl2 = max(twl2, 0.0) * (dot(l2,luma) + ts);
-	float swl1 = twl1 * (dot(l1,luma) + ts);
-	float swr1 = twr1 * (dot(r1,luma) + ts);
+	float swl1 = max(twl1, 0.0) * (dot(l1,luma) + ts);
+	float swr1 = max(twr1, 0.0) * (dot(r1,luma) + ts);
 	float swr2 = max(twr2, 0.0) * (dot(r2,luma) + ts);
 	
 	float fscolor1 = (lm2*swl2 + lm1*swl1 + rm1*swr1 + rm2*swr2)/(swl2+swl1+swr1+swr2);
@@ -415,6 +420,9 @@ void main()
 	if (!interb)
 {	
 	pC4+=offy;
+
+	if (global.intres == 0.5 &&  notate && prescalex.y < 1.5) pC4.y = floor((pos.y + 0.33*offy.y) * global.OriginalSize.y)*global.OriginalSize.w + 0.5*global.OriginalSize.w;
+	if (global.intres == 0.5 && !notate && prescalex.x < 1.5) pC4.x = floor((pos.x + 0.33*offy.x) * global.OriginalSize.x)*global.OriginalSize.z + 0.5*global.OriginalSize.z;
 	
 	l3 = COMPAT_TEXTURE(LinearizePass, pC4 -off2).rgb;
 	l2 = COMPAT_TEXTURE(LinearizePass, pC4 -offx).rgb;
@@ -445,8 +453,8 @@ void main()
 	rm2 = max(max(r2.r,r2.g),r2.b);
 	
 	swl2 = max(twl2, 0.0) * (dot(l2,luma) + ts);
-	swl1 = twl1 * (dot(l1,luma) + ts);
-	swr1 = twr1 * (dot(r1,luma) + ts);
+	swl1 = max(twl1, 0.0) * (dot(l1,luma) + ts);
+	swr1 = max(twr1, 0.0) * (dot(r1,luma) + ts);
 	swr2 = max(twr2, 0.0) * (dot(r2,luma) + ts);
 	
 	float fscolor2 = (lm2*swl2 + lm1*swl1 + rm1*swr1 + rm2*swr2)/(swl2+swl1+swr1+swr2);
@@ -505,13 +513,18 @@ if (!interb)
 	cref1 = color1 / mc1;
 	cref2 = color2 / mc2;
 
-	w1 = pow(w1, mix(2.0*scans.xxx + 1.0, 1.0.xxx, cref1))*mix(1.0.xxx + 0.075*scans, 1.0.xxx, cref1);
-	w2 = pow(w2, mix(2.0*scans.xxx + 1.0, 1.0.xxx, cref2))*mix(1.0.xxx + 0.075*scans, 1.0.xxx, cref2);
+	float scanpow1 = (scans > 0.0) ? 1.0 : pow(f1, 0.375);
+	float scanpow2 = (scans > 0.0) ? 1.0 : pow(f2, 0.375);	
+	w1 = pow(w1, mix(2.0*abs(scans).xxx + 1.0, 1.0.xxx, mix(1.0.xxx, cref1, scanpow1)));
+	w2 = pow(w2, mix(2.0*abs(scans).xxx + 1.0, 1.0.xxx, mix(1.0.xxx, cref2, scanpow2)));
 	
 	// Scanline Deconvergence
 	
-	vec3 cd1 = one; vec3 cd2 = one; float vm = sqrt(abs(vertmask));
-	
+	vec3 cd1 = one; vec3 cd2 = one; 
+
+if (abs(vertmask) > 0.025)
+{
+	float vm = sqrt(abs(vertmask));
 	float v_high1 = 1.0 + 0.3*vm;
 	float v_high2 = 1.0 + 0.6*vm;	
 	float v_low  = 1.0 - vm;
@@ -529,8 +542,9 @@ if (!interb)
 		cd1 = mix(one, vec3(v_high1, v_low, v_high1), ds1);
 		cd2 = mix(one, vec3(v_low, v_high2, v_low), ds2);
 	}
+}
 	
-	color = gc(color1)*w1*cd1 + gc(color2)*w2*cd2;
+	color = (gc(color1)*w1*cd1 + gc(color2)*w2*cd2)/mix(1.0.xxx, w1+w2, no_scanlines);
 
 	if (abs(rolling_scan) > 0.005) 
 	{ 
@@ -548,7 +562,7 @@ if (!interb)
 		color = gc(color1);
 	}
 
-	float colmx = pow(max(max(ctmp.r,ctmp.g),ctmp.b), 1.40/gamma_in);
+	float colmx = max(max(ctmp.r,ctmp.g),ctmp.b);
 
 	if(!interb) color = pow( color, vec3(gamma_in/scangamma) );
    

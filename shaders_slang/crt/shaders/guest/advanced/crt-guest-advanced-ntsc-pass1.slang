@@ -35,8 +35,6 @@ layout(push_constant) uniform Push
 	float S_SHARP;
 	float HARNG;
 	float HSHARP; 
-	float prescalex;
-	float prescaley;
 	float spike;
 	float internal_res;
 } params;
@@ -49,7 +47,7 @@ layout(std140, set = 0, binding = 0) uniform UBO
 
 #pragma parameter bogus_filtering "[ FILTERING OPTIONS ]: " 0.0 0.0 1.0 1.0
 
-#pragma parameter HSHARPNESS "          Horizontal Filter Range" 1.5 1.0 8.0 0.125
+#pragma parameter HSHARPNESS "          Horizontal Filter Range" 1.5 1.0 8.0 0.05
 #define HSHARPNESS params.HSHARPNESS
 
 #pragma parameter SIGMA_HOR "          Horizontal Blur Sigma" 0.90 0.1 7.0 0.05
@@ -66,9 +64,6 @@ layout(std140, set = 0, binding = 0) uniform UBO
 
 #pragma parameter spike "          Scanline Spike Removal" 1.0 0.0 2.0 0.10
 #define spike params.spike
-
-#pragma parameter prescalex "          Prescale-X Factor (for xBR...pre-shader)" 1.0 1.0 4.0 1.0  // Joint parameter with main pass, values must match
-#define prescalex        params.prescalex     // prescale-x factor 
 
 #define COMPAT_TEXTURE(c,d) texture(c,d)
 #define TEX0 vTexCoord
@@ -101,8 +96,10 @@ float gaussian(float x)
 
 void main()
 {	
-	vec4 SourceSize = params.OriginalSize * vec4(2.0*prescalex, 1.0, 0.5/prescalex, 1.0);
-	
+	vec2 prescalex = vec2(textureSize(LinearizePass, 0)) / params.OriginalSize.xy;
+
+	vec4 SourceSize = params.OriginalSize * vec4(2.0*prescalex.x, prescalex.y, 0.5/prescalex.x, 1.0/prescalex.y);
+
 	float f = fract(SourceSize.x * vTexCoord.x);
 	f = 0.5 - f;
 	vec2 tex = floor(SourceSize.xy * vTexCoord)*SourceSize.zw + 0.5*SourceSize.zw;
@@ -141,7 +138,7 @@ void main()
 		w = gaussian(n+f) - sharp;
 		fpx = abs(n+f-sign(n)*FPR)/FPR;
 		if (abs(n) <= CLAMPSIZE) { cmax = max(cmax, pixel); cmin = min(cmin, pixel); }
-		if (w < 0.0) w = clamp(w, mix(-maxsharp, 0.0, pow(fpx, HSHARP)), 0.0);
+		if (w < 0.0) w = clamp(w, mix(-maxsharp, 0.0, pow(clamp(fpx,0.0,1.0), HSHARP)), 0.0);
 	
 		color = color + w * pixel;
 		wsum  = wsum + w;

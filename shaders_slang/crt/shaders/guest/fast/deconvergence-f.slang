@@ -65,6 +65,8 @@ layout(std140, set = 0, binding = 0) uniform UBO
 	float post_br;
 	float noisetype;
 	float maskboost;
+	float smoothmask;
+	float gamma_c;
 } global;
 
 
@@ -90,6 +92,9 @@ layout(std140, set = 0, binding = 0) uniform UBO
 
 #pragma parameter brightboost1 "          Bright Boost Bright Pixels" 1.10 0.25 3.00 0.025
 #define brightboost1  params.brightboost1     // adjust brightness
+
+#pragma parameter gamma_c "          Gamma correct" 1.0 0.50 2.0 0.025
+#define gamma_c   global.gamma_c     // adjust brightness
 
 #pragma parameter bogus_screen "[ SCREEN OPTIONS ]: " 0.0 0.0 1.0 1.0
 
@@ -173,8 +178,11 @@ layout(std140, set = 0, binding = 0) uniform UBO
 #pragma parameter slotms "          Slot Mask Size" 1.0 1.0 4.0 1.0
 #define slotms  global.slotms     // Slot Mask Size
 
-#pragma parameter mclip "          Keep Mask effect with clipping" 0.30 0.0 1.0 0.05
+#pragma parameter mclip "          Keep Mask effect with clipping" 0.0 0.0 1.0 0.05
 #define mclip  global.mclip     //
+
+#pragma parameter smoothmask "          Smooth Masks in bright scanlines" 0.0 0.0 1.0 1.0
+#define smoothmask  global.smoothmask
 
 #pragma parameter gamma_out "Gamma out" 2.4 1.0 5.0 0.05
 #define gamma_out    global.gamma_out     // output gamma
@@ -238,7 +246,7 @@ layout(set = 0, binding = 5) uniform sampler2D Source;
 
 // Shadow mask (1-4 from PD CRT Lottes shader).
 
-vec3 Mask(vec2 pos, float mx)
+vec3 Mask(vec2 pos, float mx, float mb)
 {
 	vec2 pos0 = pos;
 	pos.y = floor(pos.y/masksize);
@@ -432,7 +440,7 @@ vec3 Mask(vec2 pos, float mx)
 	}
 	
 	float maskmin = min(min(mask.r,mask.g),mask.b);
-	return (mask - maskmin) * maskboost + maskmin;
+	return (mask - maskmin) * (1.0 + (maskboost-1.0)*mb) + maskmin;
 }
 
 float SlotMask(vec2 pos, float m)
@@ -503,6 +511,11 @@ vec3 declip(vec3 c, float b)
 	float m = max(max(c.r,c.g),c.b);
 	if (m > b) c = c*b/m;
 	return c;
+}
+
+float igc(float mc)
+{
+	return pow(mc, gamma_c);
 }
 
 // noise function:
@@ -584,7 +597,7 @@ void main()
 	vec2 texcoord = TEX0.xy;
 
 	if (IOS > 0.0 && !interb){
-		vec2 ofactor = OutputSize.xy/SourceSize.xy;
+		vec2 ofactor = OutputSize.xy/global.OriginalSize.xy;
 		vec2 intfactor = (IOS < 2.5) ? floor(ofactor) : ceil(ofactor);
 		vec2 diff = ofactor/intfactor;
 		float scan = diff.y;
@@ -597,23 +610,31 @@ void main()
 	vec2 pos1 = TEX0.xy;
 	vec2 pos  = Warp(texcoord);
 	vec2 pos0 = Warp(TEX0.xy);
-	vec3 color0 = COMPAT_TEXTURE(Source,pos1).rgb;
-	float c0 = max(max(color0.r, color0.g),color0.b);
 	
 	// color and bloom fetching
 	vec3 color = COMPAT_TEXTURE(Source,pos1).rgb;
 	vec3  Bloom = COMPAT_TEXTURE(BloomPass, pos).rgb;
-	fetch_pixel(color, Bloom, pos1, pos);
+
+if ((abs(global.deconrr) + abs(global.deconrry) + abs(global.deconrg) + abs(global.deconrgy) + abs(global.deconrb) + abs(global.deconrby)) > 0.2)
+	fetch_pixel(color, Bloom, pos1, pos); // deconvergence
 	
-	float cm = max(max(color.r,color.g),color.b);
+	float cm = igc(max(max(color.r,color.g),color.b));
 	float mx1 = COMPAT_TEXTURE(Source, pos1     ).a;
 	float colmx = max(mx1, cm);
-	float w3 = min((c0 + 0.0005) / (pow(colmx, gamma_in/1.4) + 0.0005), 1.0);
+	float w3 = min((cm + 0.0001) / (colmx + 0.0005), 1.0);
 	
 	vec2 dx = vec2(0.001, 0.0);
 	float mx0 = COMPAT_TEXTURE(Source, pos1 - dx).a;
 	float mx2 = COMPAT_TEXTURE(Source, pos1 + dx).a;
-	float mx = max(max(mx0,mx1),max(mx2,cm));
+	float mxg = max(max(mx0,mx1),max(mx2,cm));
+	float mx = pow(mxg, 1.40/gamma_in);
+
+	// mask boost tweak
+	
+	dx = vec2(global.OriginalSize.z, 0.0)*0.25;
+	mx0 = COMPAT_TEXTURE(Source, pos1 - dx).a;
+	mx2 = COMPAT_TEXTURE(Source, pos1 + dx).a;
+	float mb = 1.0 - min(abs(mx0-mx2)/(0.5+mx1), 1.0);
 	
 	vec3 one = vec3(1.0);
 	
@@ -625,32 +646,29 @@ void main()
 	vec2 maskcoord = gl_FragCoord.xy * 1.000001;
 	
 	float smask = SlotMask(maskcoord, mx);	
-	cmask*= Mask(maskcoord, mx);
+	cmask*= Mask(maskcoord, mx, mb);
 
 	if (mask_layout > 0.5) cmask = cmask.rbg;
 
+	cmask*=smask;
 	vec3 cmask1 = cmask;
-	float smask1 = smask;
 
 	if (mask_bloom > 0.025)
 	{
-		float maxb = max(max(Bloom.r,Bloom.g),Bloom.b);
-		maxb = pow(sqrt(maxb*mix(maxb, colmx, 0.75)),0.325);
-		vec3 mBloom = 0.5*(1.4*Bloom+0.6*maxb) * mix(1.0, 2.0-colmx, (bloom_dist + 0.5));
-		cmask = max(min(cmask + maxb*mBloom*mask_bloom, 1.0), cmask);
-		smask = min(smask + maxb*max(max(mBloom.r,mBloom.g),mBloom.b)*mask_bloom, 1.0);
+		float maxbl = max(max(max(Bloom.r,Bloom.g),Bloom.b), mxg);
+		maxbl = maxbl * mix(1.0, 2.0-colmx, bloom_dist);
+		cmask = max(min(cmask + maxbl*mask_bloom, 1.0), cmask);
 	}
-
+	
 	color = pow(color, vec3(mask_gamma/gamma_in));
 	color = color*cmask;
 	color = min(color,1.0);
-	color = color*smask;
 	color = pow(color, vec3(gamma_in/mask_gamma));
 
-	cmask = min(cmask*smask, 1.0);
-	cmask1 = min(cmask1*smask1, 1.0);
+	cmask = min(cmask, 1.0);
+	cmask1 = min(cmask1, 1.0);
 	
-	float bb = mix(brightboost, brightboost1, colmx);
+	float bb = mix(brightboost, brightboost1, mx);
 	if (interb) bb = (abs(intera-0.5)<0.1) ? pow(0.80*bb, 0.65) : pow(bb, 0.70);
 	color*=bb;
 
@@ -661,14 +679,14 @@ void main()
 
 	vec3 Bloom1 = Bloom;
 
+if (abs(bloom) > 0.025)
+{
 	if (bloom < -0.01) Bloom1 = plant(Bloom, maxb);
-
 	Bloom1 = min(Bloom1*(orig1+color), max(0.5*(colmx + orig1 - color),0.001*Bloom1));
 	Bloom1 = 0.5*(Bloom1 + mix(Bloom1, mix(colmx*orig1, Bloom1, 0.5), 1.0-color));
-
 	Bloom1 = Bloom1 * mix(1.0, 2.0-colmx, bloom_dist);
-
 	color = color + abs(bloom) * Bloom1;
+}
 
 	color = min(color, mix(one, cmask1, mclip));
 
@@ -682,6 +700,8 @@ void main()
 		float mbl = max(max(Bloom.r,Bloom.g),Bloom.b);
 		Bloom = plant(Bloom + Ref + orig1 + Bloom*Bloom*Bloom, min(mbl*mbl,0.75));
 		color = color + 2.0*mix(1.0,w3,0.5*colmx)*mix(one,cmask,0.5)*Bloom*(-halation); }
+
+	if (smoothmask > 0.5) { w3 = mix(1.0, w3, smoothstep(0.3, 0.6, mx1)); color = max(min(color/w3, 1.0)*w3, min(color,color*(1.0-w3))); }
 
 	Glow = mix(Glow, 0.25*color, 0.7*colmx);
 	if (glow >= 0.0) color = color + 0.5*Glow*glow; else { cmask*=cmask; cmask*=cmask; color = color + (-glow)*cmask*Glow; }
