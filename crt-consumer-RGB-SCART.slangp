@@ -2,5 +2,5 @@
 warpx = "0.000000"
 warpy = "0.000000"
 corner = "0.000000"
-Shadowmask = "-1.000000"
+Shadowmask = "5.000000"
 inter = "0.000000"
