@@ -1,0 +1,3 @@
+#reference "shaders_slang/crt/crt-guest-advanced.slangp"
+CP = "5.000000"
+shadowMask = "13.000000"
