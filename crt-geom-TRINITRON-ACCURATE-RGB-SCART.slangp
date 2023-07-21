@@ -1,0 +1,4 @@
+#reference "shaders_slang/crt/crt-geom.slangp"
+CURVATURE = "0.000000"
+cornersize = "0.005000"
+interlace_detect = "0.000000"
