@@ -1,6 +1,4 @@
-#reference "shaders_slang/crt/crt-guest-advanced.slangp"
+#reference "shaders_slang/crt/crt-guest-advanced-hd.slangp"
 CP = "5.000000"
-interm = "0.000000"
 sega_fix = "1.000000"
-h_sharp = "3.200002"
 shadowMask = "13.000000"
